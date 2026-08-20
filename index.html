@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Emotional Spectrum → MIDI Export & 32-Bit Synthesis</title>
+<style>
+  :root {
+	--bg: #181818;
+	--panel: #111;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+	background: var(--bg);
+	color: #ddd;
+	font-family: system-ui, -apple-system, sans-serif;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	min-height: 100vh;
+	padding: 2rem 1rem;
+  }
+  h1 {
+	font-weight: 300;
+	letter-spacing: 0.15em;
+	font-size: 1.1rem;
+	margin-bottom: 1.5rem;
+	text-transform: uppercase;
+	opacity: 0.7;
+  }
+  .stage {
+	display: flex;
+	gap: 2.5rem;
+	align-items: flex-start;
+	flex-wrap: wrap;
+	justify-content: center;
+  }
+  canvas {
+	image-rendering: pixelated;
+	image-rendering: crisp-edges;
+	border: 1px solid #444;
+	background: #808080;
+	cursor: crosshair;
+	box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+  }
+  .controls {
+	background: var(--panel);
+	padding: 1.5rem;
+	border-radius: 8px;
+	width: 290px;
+	display: flex;
+	flex-direction: column;
+	gap: 1rem;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+  button, label.file-upload-btn {
+	background: #252525;
+	color: #eee;
+	border: 1px solid #444;
+	padding: 0.7rem 1rem;
+	border-radius: 4px;
+	cursor: pointer;
+	font-size: 0.9rem;
+	text-align: center;
+	transition: background 0.15s;
+	display: block;
+	width: 100%;
+  }
+  button:hover, label.file-upload-btn:hover { background: #353535; }
+  button:active { background: #1a1a1a; }
+  button.playing { background: #5a3a3a; border-color: #a55; }
+  button.midi-btn { background: #334a33; border-color: #575; }
+  button.midi-btn:hover { background: #3f5a3f; }
+  input[type="file"] { display: none; }
+  .info {
+	font-size: 0.8rem;
+	line-height: 1.5;
+	opacity: 0.75;
+  }
+  .swatch {
+	width: 100%;
+	height: 32px;
+	border-radius: 3px;
+	border: 1px solid #444;
+	margin-top: 0.3rem;
+  }
+  label { font-size: 0.75rem; opacity: 0.6; display: block; margin-top: 0.3rem; }
+  input[type=range] { width: 100%; accent-color: #a55; }
+  .row-speed-container {
+    border-top: 1px solid #333;
+    padding-top: 0.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .row-speed-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    opacity: 0.8;
+  }
+  .row-speed-item input {
+    width: 110px;
+  }
+</style>
+</head>
+<body>
+  <h1>32-Bit Unique Color Soundscape & MIDI Export</h1>
+
+  <div class="stage">
+	<canvas id="grid" width="512" height="512"></canvas>
+
+	<div class="controls">
+	  <label class="file-upload-btn">
+		Load Custom Image
+		<input type="file" id="imageLoader" accept="image/*">
+	  </label>
+	  <button id="playBtn">Play Soundscape</button>
+	  <button id="stopBtn">Stop</button>
+	  <button id="midiBtn" class="midi-btn">Save as MIDI File</button>
+
+	  <div>
+		<label>Master Tempo (BPM)</label>
+		<input type="range" id="masterTempo" min="40" max="180" value="95">
+		<div class="info" id="masterTempoVal">95 BPM</div>
+	  </div>
+
+	  <div>
+		<label>Current Selected Pixel (32-bit Value)</label>
+		<div class="swatch" id="swatch"></div>
+		<div class="info" id="pixelInfo">—</div>
+	  </div>
+
+	  <div class="row-speed-container">
+        <label>Row Scan Rate Dividers</label>
+        <div class="row-speed-item">
+          <span>Top Zone:</span>
+          <input type="range" class="row-speed" data-group="0" min="1" max="4" value="1">
+        </div>
+        <div class="row-speed-item">
+          <span>Upper Mid Zone:</span>
+          <input type="range" class="row-speed" data-group="1" min="1" max="4" value="2">
+        </div>
+        <div class="row-speed-item">
+          <span>Lower Mid Zone:</span>
+          <input type="range" class="row-speed" data-group="2" min="1" max="4" value="3">
+        </div>
+        <div class="row-speed-item">
+          <span>Bottom Zone:</span>
+          <input type="range" class="row-speed" data-group="3" min="1" max="4" value="4">
+        </div>
+      </div>
+
+	  <div class="info">
+		Click “Save as MIDI File” to export the grid's visual sequence into a standard multi-track MIDI file for your DAW.
+	  </div>
+	</div>
+  </div>
+
+<canvas id="offscreenCanvas" width="32" height="32" style="display:none;"></canvas>
+
+<script>
+const SIZE = 32;
+const SCALE = 16;
+const canvas = document.getElementById('grid');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+const playBtn        = document.getElementById('playBtn');
+const stopBtn        = document.getElementById('stopBtn');
+const midiBtn        = document.getElementById('midiBtn');
+const masterTempoSl  = document.getElementById('masterTempo');
+const masterTempoVal = document.getElementById('masterTempoVal');
+const swatch         = document.getElementById('swatch');
+const pixelInfo      = document.getElementById('pixelInfo');
+const imageLoader    = document.getElementById('imageLoader');
+const offscreenCanvas= document.getElementById('offscreenCanvas');
+const offCtx         = offscreenCanvas.getContext('2d', { willReadFrequently: true });
+const rowSpeedSliders = document.querySelectorAll('.row-speed');
+
+let audioCtx = null;
+let isPlaying = false;
+let rowIntervals = [];
+
+const grid = new Array(SIZE);
+for (let y = 0; y < SIZE; y++) {
+  grid[y] = new Array(SIZE);
+  for (let x = 0; x < SIZE; x++) {
+    grid[y][x] = [128, 128, 128, 255];
+  }
+}
+
+function loadDefaultImage() {
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = function() {
+    offCtx.clearRect(0, 0, SIZE, SIZE);
+    offCtx.drawImage(img, 0, 0, SIZE, SIZE);
+    const imgData = offCtx.getImageData(0, 0, SIZE, SIZE).data;
+
+    for (let y = 0; y < SIZE; y++) {
+      for (let x = 0; x < SIZE; x++) {
+        const idx = (y * SIZE + x) * 4;
+        grid[y][x] = [imgData[idx], imgData[idx+1], imgData[idx+2], imgData[idx+3]];
+      }
+    }
+    drawGrid();
+  };
+  img.src = "4Wl5N.jpg";
+}
+loadDefaultImage();
+
+function drawGrid(activePointers = []) {
+  for (let y=0; y<SIZE; y++) {
+	for (let x=0; x<SIZE; x++) {
+	  const [r,g,b] = grid[y][x];
+	  ctx.fillStyle = `rgb(${r},${g},${b})`;
+	  ctx.fillRect(x*SCALE, y*SCALE, SCALE, SCALE);
+	}
+  }
+  activePointers.forEach(([hx, hy]) => {
+	ctx.strokeStyle = '#fff';
+	ctx.lineWidth = 1.5;
+	ctx.strokeRect(hx*SCALE+1, hy*SCALE+1, SCALE-2, SCALE-2);
+  });
+}
+
+imageLoader.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(event) {
+    const img = new Image();
+    img.onload = function() {
+      stopSequence();
+      offCtx.clearRect(0, 0, SIZE, SIZE);
+      offCtx.drawImage(img, 0, 0, SIZE, SIZE);
+      const imgData = offCtx.getImageData(0, 0, SIZE, SIZE).data;
+
+      for (let y = 0; y < SIZE; y++) {
+        for (let x = 0; x < SIZE; x++) {
+          const idx = (y * SIZE + x) * 4;
+          grid[y][x] = [imgData[idx], imgData[idx+1], imgData[idx+2], imgData[idx+3]];
+        }
+      }
+      drawGrid();
+    };
+    img.src = event.target.result;
+  };
+  reader.readAsDataURL(file);
+});
+
+/* ---------- 32-Bit Unique Color Audio Engine ---------- */
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+}
+
+function play32BitColorSound(r, g, b, a, durationSec = 0.6) {
+  ensureAudio();
+  const now = audioCtx.currentTime;
+
+  const color32 = ((r & 0xFF) << 24) | ((g & 0xFF) << 16) | ((b & 0xFF) << 8) | (a & 0xFF);
+  const baseFreq = 55 + (color32 % 1200);
+  const waveTypes = ['sine', 'triangle', 'sawtooth', 'square'];
+  const waveChoice = waveTypes[color32 % waveTypes.length];
+  const volume = 0.04 + ((color32 >> 3) & 0x1F) / 32 * 0.15;
+
+  const osc1 = audioCtx.createOscillator();
+  const osc2 = audioCtx.createOscillator();
+  const filter = audioCtx.createBiquadFilter();
+  const gain = audioCtx.createGain();
+  const panner = audioCtx.createStereoPanner ? audioCtx.createStereoPanner() : null;
+
+  if (panner) {
+    panner.pan.value = ((r - g) / 255); 
+  }
+
+  osc1.type = waveChoice;
+  osc1.frequency.value = baseFreq;
+
+  osc2.type = waveTypes[(color32 >> 2) % waveTypes.length];
+  osc2.frequency.value = baseFreq * (1 + (b / 5000));
+
+  filter.type = 'bandpass';
+  filter.frequency.value = 200 + (g * 15);
+  filter.Q.value = 1.0 + (a / 64);
+
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(volume, now + 0.04);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + durationSec);
+
+  osc1.connect(filter);
+  osc2.connect(filter);
+  filter.connect(gain);
+
+  if (panner) {
+    gain.connect(panner);
+    panner.connect(audioCtx.destination);
+  } else {
+    gain.connect(audioCtx.destination);
+  }
+
+  osc1.start(now);
+  osc2.start(now);
+  osc1.stop(now + durationSec + 0.1);
+  osc2.stop(now + durationSec + 0.1);
+}
+
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.floor((e.clientX - rect.left) / SCALE);
+  const y = Math.floor((e.clientY - rect.top)  / SCALE);
+  if (x<0||x>=SIZE||y<0||y>=SIZE) return;
+
+  const [r,g,b,a] = grid[y][x];
+  const color32Hex = '0x' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
+
+  drawGrid([[x,y]]);
+  swatch.style.background = `rgba(${r},${g},${b},${a/255})`;
+  pixelInfo.textContent = `32-bit: ${color32Hex} · RGBA(${r},${g},${b},${a})`;
+  play32BitColorSound(r, g, b, a, 1.0);
+});
+
+function stopSequence() {
+  isPlaying = false;
+  playBtn.classList.remove('playing');
+  rowIntervals.forEach(clearInterval);
+  rowIntervals = [];
+  drawGrid();
+}
+
+function playSequence() {
+  stopSequence();
+  isPlaying = true;
+  playBtn.classList.add('playing');
+  ensureAudio();
+
+  const masterBpm = parseInt(masterTempoSl.value, 10);
+  const baseStepTimeMs = (60 / masterBpm) * 280;
+  let rowX = new Array(SIZE).fill(0);
+
+  for (let y = 0; y < SIZE; y++) {
+    const groupIndex = Math.floor(y / 8);
+    const slider = document.querySelector(`.row-speed[data-group="${groupIndex}"]`);
+    const speedMultiplier = parseInt(slider.value, 10);
+    const rowDelay = baseStepTimeMs * speedMultiplier;
+
+    const intervalId = setInterval(() => {
+      if (!isPlaying) return;
+
+      const x = rowX[y];
+      const [r, g, b, a] = grid[y][x];
+
+      play32BitColorSound(r, g, b, a, (rowDelay / 1000) * 1.4);
+
+      rowX[y] = (rowX[y] + 1) % SIZE;
+
+      const activePointers = rowX.map((cx, cy) => [cx === 0 ? SIZE - 1 : cx - 1, cy]);
+      drawGrid(activePointers);
+
+      if (y === 0) {
+        const color32Hex = '0x' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
+        swatch.style.background = `rgba(${r},${g},${b},${a/255})`;
+        pixelInfo.textContent = `Active 32-bit: ${color32Hex}`;
+      }
+    }, rowDelay);
+
+    rowIntervals.push(intervalId);
+  }
+}
+
+/* ---------- MIDI File Export Engine ---------- */
+function writeVariableLength(value) {
+  let buffer = [];
+  let val = value;
+  buffer.push(val & 0x7F);
+  while ((val >>= 7) > 0) {
+    buffer.unshift((val & 0x7F) | 0x80);
+  }
+  return buffer;
+}
+
+function generateMidiFile() {
+  // Helper to convert numbers into binary bytes
+  function writeWord(num, len, arr) {
+    for (let i = len - 1; i >= 0; i--) {
+      arr.push((num >> (8 * i)) & 0xFF);
+    }
+  }
+
+  const ticksPerBeat = 128;
+  const tracks = [];
+
+  // Build a track for each row of the grid
+  for (let y = 0; y < SIZE; y++) {
+    const groupIndex = Math.floor(y / 8);
+    const slider = document.querySelector(`.row-speed[data-group="${groupIndex}"]`);
+    const speedMultiplier = parseInt(slider.value, 10);
+    const stepTicks = ticksPerBeat * speedMultiplier;
+
+    let trackEvents = [];
+    // Initial patch/instrument program change event
+    trackEvents.push({ delta: 0, bytes: [0xC0, y % 8] });
+
+    for (let x = 0; x < SIZE; x++) {
+      const [r, g, b, a] = grid[y][x];
+      const color32 = ((r & 0xFF) << 24) | ((g & 0xFF) << 16) | ((b & 0xFF) << 8) | (a & 0xFF);
+      
+      // Map color hash to standard MIDI note bounds (MIDI range 36 to 84)
+      const midiNote = 36 + (Math.abs(color32) % 48);
+      const velocity = Math.max(30, Math.min(127, Math.floor((a / 255) * 127)));
+
+      // Note On
+      trackEvents.push({
+        delta: x === 0 ? 0 : stepTicks,
+        bytes: [0x90, midiNote, velocity]
+      });
+
+      // Note Off (short duration)
+      trackEvents.push({
+        delta: Math.floor(stepTicks * 0.8),
+        bytes: [0x80, midiNote, 0x00]
+      });
+    }
+
+    // End of track meta event
+    trackEvents.push({ delta: ticksPerBeat, bytes: [0xFF, 0x2F, 0x00] });
+
+    // Flatten track events into raw bytes
+    let trackData = [];
+    trackEvents.forEach(ev => {
+      trackData.push(...writeVariableLength(ev.delta));
+      trackData.push(...ev.bytes);
+    });
+
+    let trackChunk = [];
+    trackChunk.push(0x4D, 0x54, 0x72, 0x6B); // "MTrk"
+    writeWord(trackData.length, 4, trackChunk);
+    trackChunk.push(...trackData);
+    tracks.push(trackChunk);
+  }
+
+  // MIDI Header Chunk (Format 1: multiple simultaneous tracks)
+  let headerChunk = [];
+  headerChunk.push(0x4D, 0x54, 0x68, 0x64); // "MThd"
+  writeWord(6, 4, headerChunk);             // Header length
+  writeWord(1, 2, headerChunk);             // Format 1
+  writeWord(SIZE, 2, headerChunk);          // Number of tracks
+  writeWord(ticksPerBeat, 2, headerChunk);  // Division
+
+  let fileBytes = [...headerChunk];
+  tracks.forEach(trk => fileBytes.push(...trk));
+
+  // Trigger browser file download
+  const blob = new Blob([new Uint8Array(fileBytes)], { type: 'audio/midi' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'emotional-spectrum-grid.mid';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+playBtn.addEventListener('click', playSequence);
+stopBtn.addEventListener('click', stopSequence);
+midiBtn.addEventListener('click', generateMidiFile);
+
+masterTempoSl.addEventListener('input', () => {
+  masterTempoVal.textContent = masterTempoSl.value + ' BPM';
+  if (isPlaying) playSequence();
+});
+
+rowSpeedSliders.forEach(slider => {
+  slider.addEventListener('input', () => {
+    if (isPlaying) playSequence();
+  });
+});
+</script>
+</body>
+</html>
